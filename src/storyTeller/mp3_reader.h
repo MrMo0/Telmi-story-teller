@@ -1,6 +1,10 @@
 #ifndef MP3_READER_
 #define MP3_READER_
 
+#ifndef MPG123_NO_LARGENAME
+#define MPG123_NO_LARGENAME
+#endif
+
 #include <fcntl.h>
 #include <pthread.h>
 #include <stdbool.h>
@@ -10,23 +14,11 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
-
 #include "SDL2/SDL.h"
-
-// Utilise les symboles mpg123 "plats" (mpg123_seek_frame et non mpg123_seek_frame_64),
-// indépendamment du _FILE_OFFSET_BITS éventuel de la toolchain.
-#ifndef MPG123_NO_LARGENAME
-#define MPG123_NO_LARGENAME
-#endif
 #include "mpg123/mpg123.h"
-
 #include "utils/str.h"
-
 #include "./logs_helper.h"
 
-// ---------------------------------------------------------------------------
-// Hash de chaîne (partagé avec le cache de surfaces de sdl_helper.h)
-// ---------------------------------------------------------------------------
 
 static uint64_t string_hash(const char *path) {
     uint64_t h = 0xcbf29ce484222325ULL;
@@ -38,16 +30,9 @@ static uint64_t string_hash(const char *path) {
     return h;
 }
 
-// ---------------------------------------------------------------------------
-// Estimation de durée MP3 (CBR)
-// ---------------------------------------------------------------------------
-
-// Tableaux des bitrates Layer III des frames MP3, indexés par bitRateIndex
 static const int mpeg1Layer3Bitrates[15] = {0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320};
 static const int mpeg2Layer3Bitrates[15] = {0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160};
 
-// Recherche la première frame MP3 (Layer III) valide dans data et retourne son
-// bitrate en kbps, ou -1 si aucune frame valide n'est trouvée.
 static int mp3_frame_bitrate(const uint8_t *data, size_t length) {
     int bitrateKbps = -1;
     for (size_t offset = 0; offset + 3 < length && bitrateKbps < 0; ++offset) {
@@ -73,14 +58,7 @@ static int mp3_frame_bitrate(const uint8_t *data, size_t length) {
     return bitrateKbps;
 }
 
-// Estimation rapide de la durée d'un MP3 CBR : durée = octetsAudio * 8 / bitrate.
-// On lit seulement le premier frame pour récupérer le bitrate, et on déduit la
-// taille des tags ID3 (qui ne sont pas de l'audio). La détection VBR échantillonne
-// une frame au milieu de la zone audio : si son bitrate diffère du premier frame,
-// le fichier n'est pas CBR et la formule n'est plus valable. Retourne -1 si aucune
-// frame MP3 valide n'est trouvée ou si VBR est détecté (le caller doit alors replier
-// sur mpg123_scan + mpg123_length).
-double mp3_duration_estimate(const char *path) {
+static double mp3_duration_estimate(const char *path) {
     double duration = -1.0;
     int fd = open(path, O_RDONLY);
     if (fd >= 0) {
@@ -153,23 +131,10 @@ double mp3_duration_estimate(const char *path) {
                 }
             }
         }
-        close(fd); // unique point de sortie : impossible d'oublier la fermeture
+        close(fd);
     }
     return duration;
 }
-
-// ---------------------------------------------------------------------------
-// Moteur mpg123 (remplace SDL_mixer) + API audio_*
-// ---------------------------------------------------------------------------
-// Le MP3 est décodé par mpg123 dans le callback audio SDL (thread audio) :
-// - le format de sortie est FORCÉ à 44100 Hz / S16LE / 2 canaux (mpg123_format),
-//   le device SDL est ouvert avec exactement ce format ;
-// - le seek (audio_setPosition) ne fait que demander un offset au frame ;
-//   mpg123_seek_frame déplace le pointeur de fichier sans re-décoder → le seek
-//   arrière est aussi rapide que le seek avant ;
-// - tout accès au handle mpg123 / à currentPosition passe par audioMutex ;
-//   le main thread ne touche jamais au handle directement (sauf sous mutex,
-//   dans audio_play_path / audio_closeLocked).
 
 #define MP3_AUDIO_SAMPLE_RATE 44100
 #define MP3_AUDIO_CHANNELS 2
@@ -183,7 +148,6 @@ static double currentPosition = 0.0;
 static bool isPlaying = false;
 static bool isPaused = false;
 static bool isFinished = true;
-// Demande de seek (main thread -> thread audio)
 static bool seekRequested = false;
 static double seekTarget = 0.0;
 
@@ -196,56 +160,46 @@ typedef struct {
 
 static audioDurationCacheEntry audioDurationCache[AUDIO_DURATION_CACHE_SIZE];
 
-// --- Debug : compteurs mis à jour par le thread audio, lus par le main thread ---
-static volatile long dbgCbCalls = 0;
-static volatile long dbgCbMpgNull = 0;
-static volatile long dbgCbSilence = 0;
-static volatile long dbgCbDecodeOk = 0;
-static volatile long dbgCbDecodeErr = 0;
-static volatile long dbgCbSeek = 0;
-static volatile int dbgCbLastResult = 0;
-static volatile long dbgCbLastDone = 0;
+static off_t mp3_frameForTime(mpg123_handle *handle, double time) {
+    off_t frame = mpg123_timeframe(handle, time);
+    if (frame < 0) {
+        int rate = MP3_AUDIO_SAMPLE_RATE;
+        struct mpg123_frameinfo frameInfo;
+        if (mpg123_info(handle, &frameInfo) == MPG123_OK && frameInfo.rate > 0) {
+            rate = (int) frameInfo.rate;
+        }
+        int samplesPerFrame = mpg123_spf(handle);
+        if (samplesPerFrame <= 0) {
+            samplesPerFrame = 1152;
+        }
+        frame = (off_t) ((time * (double) rate) / (double) samplesPerFrame);
+    }
+    return frame;
+}
 
-// Callback audio SDL (thread audio) : décode le MP3 vers le buffer SDL.
 static void audio_callback(void *userdata, Uint8 *stream, int len) {
     (void) userdata;
     pthread_mutex_lock(&audioMutex);
-    dbgCbCalls++;
     if (mpg != NULL && seekRequested) {
         seekRequested = false;
-        long frame = (long) mpg123_timeframe(mpg, seekTarget);
-        if (frame < 0) {
-            int samplesPerFrame = mpg123_spf(mpg);
-            if (samplesPerFrame <= 0) {
-                samplesPerFrame = 1152;
-            }
-            frame = (long) ((seekTarget * (double) MP3_AUDIO_SAMPLE_RATE) / (double) samplesPerFrame);
+        off_t frame = mp3_frameForTime(mpg, seekTarget);
+        if (mpg123_seek_frame(mpg, frame, SEEK_SET) >= 0) {
+            currentPosition = seekTarget;
         }
-        mpg123_seek_frame(mpg, frame, SEEK_SET);
-        currentPosition = seekTarget;
-        dbgCbSeek++;
     }
     if (mpg == NULL) {
-        dbgCbMpgNull++;
         memset(stream, 0, len);
         pthread_mutex_unlock(&audioMutex);
         return;
     }
     if (isPaused || isFinished) {
-        dbgCbSilence++;
         memset(stream, 0, len);
         pthread_mutex_unlock(&audioMutex);
         return;
     }
     size_t done = 0;
     int result = mpg123_decode(mpg, NULL, 0, stream, (size_t) len, &done);
-    dbgCbLastResult = result;
-    dbgCbLastDone = (long) done;
     if (result == MPG123_OK || result == MPG123_NEW_FORMAT) {
-        // Succès, ou changement de format (NEW_FORMAT : souvent done=0 sur le 1er
-        // frame, juste le setup du format de sortie). On joue les `done` octets
-        // (silence si 0) et on CONTINUE : ce n'est PAS une fin de piste.
-        dbgCbDecodeOk++;
         if (done > 0) {
             if (done < (size_t) len) {
                 memset(stream + done, 0, len - (int) done);
@@ -255,29 +209,10 @@ static void audio_callback(void *userdata, Uint8 *stream, int len) {
             memset(stream, 0, len);
         }
     } else {
-        // MPG123_DONE (fin de piste) ou erreur de lecture : on gèle sur silence.
-        dbgCbDecodeErr++;
         isFinished = true;
         isPlaying = false;
         memset(stream, 0, len);
     }
-    pthread_mutex_unlock(&audioMutex);
-}
-
-// Dump d'état debug (à appeler depuis le MAIN thread, JAMAIS depuis le callback).
-static void audio_debug_dump(const char *context) {
-    pthread_mutex_lock(&audioMutex);
-    char msg[256];
-    sprintf(msg,
-        "[%s] cb=%ld mpgNull=%ld sil=%ld ok=%ld err=%ld seek=%ld | "
-        "mpg=%d play=%d pause=%d fin=%d pos=%.1f dur=%.1f res=%d done=%ld",
-        context,
-        (long) dbgCbCalls, (long) dbgCbMpgNull, (long) dbgCbSilence,
-        (long) dbgCbDecodeOk, (long) dbgCbDecodeErr, (long) dbgCbSeek,
-        (mpg != NULL) ? 1 : 0, (int) isPlaying, (int) isPaused, (int) isFinished,
-        currentPosition, musicDuration,
-        (int) dbgCbLastResult, (long) dbgCbLastDone);
-    writeLog("mp3_reader", msg);
     pthread_mutex_unlock(&audioMutex);
 }
 
@@ -376,13 +311,6 @@ double audio_getPosition(void) {
     pthread_mutex_lock(&audioMutex);
     double position = currentPosition;
     pthread_mutex_unlock(&audioMutex);
-    // Debug : dump périodique (~1 s) pour observer la vie du callback.
-    static Uint32 dbgLastTick = 0;
-    Uint32 now = SDL_GetTicks();
-    if (now - dbgLastTick >= 1000) {
-        dbgLastTick = now;
-        audio_debug_dump("tick");
-    }
     return position;
 }
 
@@ -399,13 +327,12 @@ void audio_setPosition(double position) {
         seekRequested = true;
     }
     pthread_mutex_unlock(&audioMutex);
-    audio_debug_dump("seek");
 }
 
 void audio_play_path(char *soundPath, double position, bool askDuration) {
     pthread_mutex_lock(&audioMutex);
     audio_closeLocked();
-    musicDuration = -1.0;
+    musicDuration = 0.0;
     if (position < 0.0) {
         position = 0.0;
     }
@@ -415,10 +342,9 @@ void audio_play_path(char *soundPath, double position, bool askDuration) {
         mpg123_handle *handle = mpg123_new(NULL, &error);
         if (handle != NULL) {
             if (mpg123_open_fd(handle, fd) == MPG123_OK) {
-                // Force le format de sortie : 44100 Hz / S16LE / stéréo (le device
-                // SDL est ouvert avec exactement ce format, cf. mp3_reader_init).
                 mpg123_format_none(handle);
                 mpg123_format(handle, MP3_AUDIO_SAMPLE_RATE, MP3_AUDIO_CHANNELS, MPG123_ENC_SIGNED_16);
+                musicDuration = -1.0;
                 if (askDuration) {
                     double cachedDuration = audio_duration_cache_get(soundPath);
                     if (cachedDuration >= 0.0) {
@@ -426,36 +352,32 @@ void audio_play_path(char *soundPath, double position, bool askDuration) {
                     } else {
                         musicDuration = mp3_duration_estimate(soundPath);
                         if (musicDuration < 0.0) {
-                            // VBR ou durée inconnue : scan complet du fichier (construit
-                            // aussi le seek index → tous les seeks suivants sont exacts).
                             if (mpg123_scan(handle) == MPG123_OK) {
                                 off_t length = mpg123_length(handle);
                                 if (length > 0) {
-                                    musicDuration = (double) length / (double) MP3_AUDIO_SAMPLE_RATE;
+                                    double sourceRate = (double) MP3_AUDIO_SAMPLE_RATE;
+                                    struct mpg123_frameinfo frameInfo;
+                                    if (mpg123_info(handle, &frameInfo) == MPG123_OK && frameInfo.rate > 0) {
+                                        sourceRate = (double) frameInfo.rate;
+                                    }
+                                    musicDuration = (double) length / sourceRate;
                                 }
                             }
                         }
                         audio_duration_cache_set(soundPath, musicDuration);
                     }
                 }
+                if (musicDuration > 0.0 && position > musicDuration) {
+                    position = musicDuration;
+                }
                 if (position > 0.0) {
-                    // Décode un frame pour que mpg123 ait des infos de frame
-                    // (bitrate, samples per frame) avant le seek initial.
                     unsigned char frameBuffer[8192];
                     size_t frameDone = 0;
                     mpg123_decode(handle, NULL, 0, frameBuffer, sizeof(frameBuffer), &frameDone);
-                    long frame = (long) mpg123_timeframe(handle, position);
-                    if (frame < 0) {
-                        int samplesPerFrame = mpg123_spf(handle);
-                        if (samplesPerFrame <= 0) {
-                            samplesPerFrame = 1152;
-                        }
-                        frame = (long) ((position * (double) MP3_AUDIO_SAMPLE_RATE) / (double) samplesPerFrame);
+                    off_t frame = mp3_frameForTime(handle, position);
+                    if (mpg123_seek_frame(handle, frame, SEEK_SET) >= 0) {
+                        currentPosition = position;
                     }
-                    mpg123_seek_frame(handle, frame, SEEK_SET);
-                    currentPosition = position;
-                } else {
-                    currentPosition = 0.0;
                 }
                 mpg = handle;
                 mpgFd = fd;
@@ -478,20 +400,15 @@ void audio_play_path(char *soundPath, double position, bool askDuration) {
         writeLog("mp3_reader", "open failed");
     }
     pthread_mutex_unlock(&audioMutex);
-    audio_debug_dump("play");
 }
 
 void audio_play(const char *dir, const char *name, double position, bool askDuration) {
     char soundPath[STR_MAX * 2];
-    sprintf(soundPath, "%s%s", dir, name);
+    snprintf(soundPath, sizeof(soundPath), "%s%s", dir, name);
     audio_play_path(soundPath, position, askDuration);
 }
 
-// Ouvre le device audio SDL UNE fois (le callback tourne en permanence et met du
-// silence tant qu'aucune piste n'est chargée).
 void mp3_reader_init(void) {
-    // Initialisation de la lib mpg123 : à appeler EXACTEMENT une fois par process,
-    // avant tout autre travail (threadé) avec la lib.
     if (mpg123_init() != MPG123_OK) {
         writeLog("mp3_reader", "mpg123_init failed");
     }
@@ -502,8 +419,6 @@ void mp3_reader_init(void) {
     want.samples = MP3_AUDIO_BUFFER_SAMPLES;
     want.callback = audio_callback;
     want.userdata = NULL;
-    // obtained = NULL : SDL garantit que le callback reçoit EXACTEMENT le format
-    // demandé (44100 Hz / S16LE / stéréo) et convertit vers le hardware si besoin.
     if (SDL_OpenAudio(&want, NULL) < 0) {
         writeLog("mp3_reader", "SDL_OpenAudio failed");
     } else {
@@ -518,6 +433,7 @@ void mp3_reader_quit(void) {
     audio_closeLocked();
     pthread_mutex_unlock(&audioMutex);
     SDL_CloseAudio();
+    mpg123_exit();
 }
 
 #endif // MP3_READER_

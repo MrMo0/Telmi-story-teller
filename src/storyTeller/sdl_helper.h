@@ -234,7 +234,7 @@ void video_showAppLock(void) {
 
 void video_applyToVideo(void) {
     video_showBattery();
-    // video_showRam();
+    video_showRam();
     SDL_BlitSurface(appSurface, NULL, screen, NULL);
     video_showAppLock();
     video_showBar();

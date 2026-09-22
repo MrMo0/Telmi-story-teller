@@ -604,7 +604,7 @@ void stories_drawTimeline(bool forceDraw) {
         video_drawRectangle(80, 217, (int) (((double) storyPosition / (double) storyDuration) * 479.0), 19, 255, 186, 0);
     }
     video_screenAddImage(SYSTEM_RESOURCES, "storytellerStoryPlayer.png", 61, 203, 518);
-    if (Mix_PausedMusic() == 1) {
+    if (audio_isPaused()) {
         video_screenAddImage(SYSTEM_RESOURCES, "storytellerPause.png", 308, 245, 24);
     } else {
         video_screenAddImage(SYSTEM_RESOURCES, "storytellerPlay.png", 308, 245, 24);
@@ -1178,13 +1178,13 @@ void stories_pause(void) {
         stories_nightMode_addToPlaylist();
         stories_nightMode_start();
     } else {
-        if (Mix_PlayingMusic() == 1) {
-            if (Mix_PausedMusic() == 1) {
+        if (audio_isPlaying()) {
+            if (audio_isPaused()) {
                 autosleep_lock();
-                Mix_ResumeMusic();
+                audio_resume();
             } else {
                 stories_autosleep_unlock();
-                Mix_PauseMusic();
+                audio_pause();
             }
             stories_showTimeline();
         }
@@ -1213,8 +1213,8 @@ void stories_save(void) {
         return;
     }
 
-    if (Mix_PlayingMusic() == 1) {
-        if (Mix_PausedMusic() != 1) {
+    if (audio_isPlaying()) {
+        if (!audio_isPaused()) {
             stories_pause();
         }
     }

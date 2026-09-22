@@ -5,7 +5,6 @@
 #include <stdint.h>
 
 #include "SDL2/SDL.h"
-#include "SDL2/SDL_mixer.h"
 #include "SDL2/SDL_image.h"
 #include "SDL2/SDL_ttf.h"
 #include "SDL2/SDL_gfx.h"
@@ -13,7 +12,7 @@
 #include "system/display.h"
 #include "utils/str.h"
 
-#include "./mp3_helper.h"
+#include "./mp3_reader.h"
 #include "./logs_helper.h"
 #include "./app_battery.h"
 #include "./app_lock.h"
@@ -45,18 +44,6 @@ typedef struct {
 
 static surfaceCacheEntry surfaceCache[SURFACE_CACHE_SIZE];
 
-static Mix_Music *music;
-static double musicDuration;
-
-#define AUDIO_DURATION_CACHE_SIZE 128
-
-typedef struct {
-    uint64_t hash;
-    double duration;
-} audioDurationCacheEntry;
-
-static audioDurationCacheEntry audioDurationCache[AUDIO_DURATION_CACHE_SIZE];
-
 static TTF_Font *fontBold24;
 static TTF_Font *fontBold20;
 static TTF_Font *fontBold18;
@@ -70,16 +57,6 @@ static SDL_Color colorPurple = {37, 16, 58};
 static SDL_Color colorOrange = {255, 181, 0};
 static SDL_Color colorRed = {238, 45, 0};
 
-
-static uint64_t string_hash(const char *path) {
-    uint64_t h = 0xcbf29ce484222325ULL;
-    while (*path != '\0') {
-        h ^= (uint8_t) *path;
-        h *= 0x100000001b3ULL;
-        path++;
-    }
-    return h;
-}
 
 static uint64_t video_surfaceCacheHash(const char *path, int width) {
     uint64_t hash = string_hash(path);
@@ -291,90 +268,6 @@ void video_displayBlackScreen(void) {
     video_applyToVideo();
 }
 
-double audio_duration_cache_get(const char *path) {
-    uint64_t hash = string_hash(path);
-    double duration = -1.0;
-    int i = 0;
-    while (i < AUDIO_DURATION_CACHE_SIZE && audioDurationCache[i].hash != hash) {
-        ++i;
-    }
-    if (i < AUDIO_DURATION_CACHE_SIZE) {
-        audioDurationCacheEntry entry = audioDurationCache[i];
-        memmove(&audioDurationCache[1], &audioDurationCache[0], i * sizeof(audioDurationCache[0]));
-        audioDurationCache[0] = entry;
-        duration = entry.duration;
-    }
-    return duration;
-}
-
-void audio_duration_cache_set(const char *path, double duration) {
-    if (duration <= 0.0) {
-        return;
-    }
-    uint64_t hash = string_hash(path);
-    memmove(&audioDurationCache[1], &audioDurationCache[0], (AUDIO_DURATION_CACHE_SIZE - 1) * sizeof(audioDurationCache[0]));
-    audioDurationCache[0].hash = hash;
-    audioDurationCache[0].duration = duration;
-}
-
-bool audio_isFinished(void) {
-    return music == NULL || Mix_PlayingMusic() == 0;
-}
-
-void audio_free_music(void) {
-    if (music != NULL) {
-        Mix_HaltMusic();
-        Mix_FreeMusic(music);
-        music = NULL;
-    }
-    musicDuration = 0.0;
-}
-
-void audio_setPosition(double position) {
-    if (!audio_isFinished()) {
-        Mix_SetMusicPosition(position);
-    }
-}
-
-double audio_getDuration(void) {
-    return musicDuration;
-}
-
-double audio_getPosition(void) {
-    if (music != NULL) {
-        return Mix_GetMusicPosition(music);
-    }
-    return 0.0;
-}
-
-void audio_play_path(char *soundPath, double position, bool askDuration) {
-    audio_free_music();
-    music = Mix_LoadMUS(soundPath);
-    if (music != NULL) {
-        musicDuration = -1.0;
-        if (askDuration) {
-            double cachedDuration = audio_duration_cache_get(soundPath);
-            if (cachedDuration >= 0.0) {
-                musicDuration = cachedDuration;
-            } else {
-                musicDuration = mp3_duration_estimate(soundPath);
-                if (musicDuration < 0.0) {
-                    musicDuration = Mix_MusicDuration(music);
-                }
-                audio_duration_cache_set(soundPath, musicDuration);
-            }
-        }
-        Mix_PlayMusic(music, 1);
-        Mix_SetMusicPosition(position);
-    }
-}
-
-void audio_play(const char *dir, const char *name, double position, bool askDuration) {
-    char soundPath[STR_MAX * 2];
-    sprintf(soundPath, "%s%s", dir, name);
-    audio_play_path(soundPath, position, askDuration);
-}
-
 void video_audio_init(void) {
     SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
@@ -382,10 +275,7 @@ void video_audio_init(void) {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
     IMG_Init(IMG_INIT_PNG);
     TTF_Init();
-    Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 4096);
-    Mix_Init(MIX_INIT_MP3);
-    Mix_Volume(-1, MIX_MAX_VOLUME);
-    Mix_VolumeMusic(MIX_MAX_VOLUME);
+    mp3_reader_init();
 
     window = SDL_CreateWindow("main", 0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT, SDL_WINDOW_SHOWN);
     renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
@@ -405,11 +295,7 @@ void video_audio_init(void) {
 void video_audio_quit(void) {
     TTF_Quit();
 
-    if (music != NULL) {
-        Mix_FreeMusic(music);
-        music = NULL;
-    }
-    Mix_CloseAudio();
+    mp3_reader_quit();
 
     SDL_FreeSurface(appSurface);
     SDL_FreeSurface(screen);

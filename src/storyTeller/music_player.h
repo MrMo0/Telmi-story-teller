@@ -290,12 +290,12 @@ void musicplayer_load(void) {
         musicPlayerTrackIndex = 0;
     }
 
-    bool isPaused = Mix_PlayingMusic() == 1 && Mix_PausedMusic() == 1;
+    bool isPaused = audio_isPlaying() && audio_isPaused();
 
     audio_play(MUSICPLAYER_RESOURCES, musicPlayerTracksList[musicPlayerTrackIndex], musicPlayerTrackPosition, true);
 
     if (isPaused) {
-        Mix_PauseMusic();
+        audio_pause();
     }
 
     if (display_enabled && musicPlayerMode == MUSICPLAYER_MODE_PLAYER) {
@@ -443,12 +443,12 @@ void musicplayer_pause(void) {
         return;
     }
     musicplayer_screenActivate();
-    if (Mix_PlayingMusic() == 1) {
-        if (Mix_PausedMusic() == 1) {
-            Mix_ResumeMusic();
+    if (audio_isPlaying()) {
+        if (audio_isPaused()) {
+            audio_resume();
             musicplayer_autosleep_lock();
         } else {
-            Mix_PauseMusic();
+            audio_pause();
             musicPlayerTrackPosition = audio_getPosition();
             musicplayer_autosleep_unlock();
         }
@@ -460,7 +460,7 @@ bool musicplayer_home(void) {
         return true;
     }
     if (musicPlayerMode == MUSICPLAYER_MODE_PLAYER) {
-        if (Mix_PlayingMusic() == 1 && Mix_PausedMusic() != 1) {
+        if (audio_isPlaying() && !audio_isPaused()) {
             musicPlayerTrackPosition = audio_getPosition();
         }
         audio_free_music();
@@ -498,8 +498,8 @@ void musicplayer_save(void) {
         return;
     }
 
-    if (Mix_PlayingMusic() == 1) {
-        if (Mix_PausedMusic() != 1) {
+    if (audio_isPlaying()) {
+        if (!audio_isPaused()) {
             musicplayer_pause();
         }
     }

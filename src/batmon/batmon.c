@@ -24,10 +24,9 @@ int main(int argc, char *argv[])
     while (!quit) {
         if (battery_isCharging()) {
             if (!is_charging) {
-                if (DEVICE_ID == MIYOO354) {
+                if (HAS_AXP()) {
                     current_percentage = getBatPercMMP();
-                }
-                else {
+                } else {
                     current_percentage = 500;
                     saveFakeAxpResult(current_percentage);
                 }
@@ -41,7 +40,7 @@ int main(int argc, char *argv[])
                 current_percentage = batteryPercentage(adc_value_g);
                 saveFakeAxpResult(current_percentage);
             }
-            else if (DEVICE_ID == MIYOO354) {
+            else if (HAS_AXP()) {
                 current_percentage = getBatPercMMP();
             }
             printf_debug(
@@ -57,7 +56,7 @@ int main(int argc, char *argv[])
                     adc_value_g = updateADCValue(adc_value_g);
                     current_percentage = batteryPercentage(adc_value_g);
                 }
-                else if (DEVICE_ID == MIYOO354) {
+                else if (HAS_AXP()) {
                     current_percentage = getBatPercMMP();
                 }
                 printf_debug(

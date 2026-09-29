@@ -9,6 +9,7 @@
 #include "system/settings.h"
 #include "system/settings_sync.h"
 #include "system/display.h"
+#include "system/device_model.h"
 
 #include "./logs_helper.h"
 #include "./time_helper.h"
@@ -19,6 +20,7 @@
 #include "./sdl_helper.h"
 #include "./app_selector.h"
 #include "./app_parameters.h"
+#include "./headphone.h"
 
 // for ev.value
 #define RELEASED 0
@@ -45,7 +47,14 @@ int main(int argc, char *argv[]) {
     display_init();
     video_audio_init();
     settings_init();
+    getDeviceModel();
+    {
+        char msg[64];
+        snprintf(msg, sizeof(msg), "DEVICE_ID=%d", DEVICE_ID);
+        writeLog("storyTeller", msg);
+    }
     parameters_init();
+    headphone_init();
     settings_setVolume(parameters_getAudioVolumeStartup(), true);
     settings_setBrightness(parameters_getScreenBrightnessStartup(), true, false);
 
@@ -71,6 +80,7 @@ int main(int argc, char *argv[]) {
         forceRefreshScreen = app_volume_checkDisplay() || forceRefreshScreen;
         forceRefreshScreen = app_brightness_checkDisplay() || forceRefreshScreen;
         app_update();
+        headphone_check();
 
         if (poll(fds, 1, 0) > 0) {
             if (!keyinput_isValid()) {

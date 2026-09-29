@@ -13,6 +13,7 @@
 #include "utils/str.h"
 
 #include "./mp3_reader.h"
+#include "./crypt_helpers.h"
 #include "./logs_helper.h"
 #include "./app_battery.h"
 #include "./app_lock.h"

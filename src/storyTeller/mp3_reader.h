@@ -10,25 +10,17 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
 #include "SDL2/SDL.h"
 #include "mpg123/mpg123.h"
+#include "utils/file.h"
 #include "utils/str.h"
 #include "./logs_helper.h"
-
-
-static uint64_t string_hash(const char *path) {
-    uint64_t h = 0xcbf29ce484222325ULL;
-    while (*path != '\0') {
-        h ^= (uint8_t) *path;
-        h *= 0x100000001b3ULL;
-        path++;
-    }
-    return h;
-}
+#include "./crypt_helpers.h"
 
 static const int mpeg1Layer3Bitrates[15] = {0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320};
 static const int mpeg2Layer3Bitrates[15] = {0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160};
@@ -136,6 +128,141 @@ static double mp3_duration_estimate(const char *path) {
     return duration;
 }
 
+#define MP3_CACHE_DIR        "/mnt/SDCARD/.cache/mp3scan"
+#define MP3_CACHE_MAGIC      0x43333350u // "MP3C"
+#define MP3_CACHE_VERSION    1
+#define MP3_CACHE_HEADER_SIZE (sizeof(uint32_t) + sizeof(int) + sizeof(off_t) + sizeof(double) + sizeof(off_t) + sizeof(size_t))
+#define MP3_CACHE_MAX_FILL   200000
+
+static void mp3_scanCachePath(const char *path, const char *suffix, char *out, size_t outSize) {
+    char md5[33];
+    md5_string(path, md5);
+    snprintf(out, outSize, "%s/%s%s", MP3_CACHE_DIR, md5, suffix);
+}
+
+// Renvoie la durée du cache si valide, sinon -1.0.
+// Si valide : restaure l'index de seek dans `handle` via mpg123_set_index().
+static double mp3_scanCache_get(const char *path, mpg123_handle *handle) {
+    struct stat fileStat;
+    if (stat(path, &fileStat) != 0 || fileStat.st_size <= 0) {
+        return -1.0;
+    }
+    off_t fileSize = fileStat.st_size;
+
+    char cachePath[128];
+    mp3_scanCachePath(path, ".cache", cachePath, sizeof(cachePath));
+    if (!exists(cachePath)) {
+        return -1.0;
+    }
+
+    FILE *fp = fopen(cachePath, "rb");
+    if (fp == NULL) {
+        writeLog("mp3_reader", "scanCache: fopen failed");
+        return -1.0;
+    }
+
+    uint32_t magic = 0;
+    int version = 0;
+    off_t cachedFileSize = 0;
+    double duration = -1.0;
+    off_t step = 0;
+    size_t fill = 0;
+    bool headerOk = fread(&magic, sizeof(magic), 1, fp) == 1
+        && fread(&version, sizeof(version), 1, fp) == 1
+        && fread(&cachedFileSize, sizeof(cachedFileSize), 1, fp) == 1
+        && fread(&duration, sizeof(duration), 1, fp) == 1
+        && fread(&step, sizeof(step), 1, fp) == 1
+        && fread(&fill, sizeof(fill), 1, fp) == 1;
+    if (!headerOk
+        || magic != MP3_CACHE_MAGIC
+        || version != MP3_CACHE_VERSION
+        || cachedFileSize != fileSize
+        || duration <= 0.0
+        || fill == 0
+        || fill > MP3_CACHE_MAX_FILL) {
+        fclose(fp);
+        return -1.0; // cache absent/invalide → re-scan
+    }
+
+    off_t *offsets = (off_t *) malloc(fill * sizeof(off_t));
+    if (offsets == NULL) {
+        writeLog("mp3_reader", "scanCache: malloc failed");
+        fclose(fp);
+        return -1.0;
+    }
+    if (fseek(fp, (long) MP3_CACHE_HEADER_SIZE, SEEK_SET) != 0
+        || fread(offsets, sizeof(off_t), fill, fp) != fill) {
+        free(offsets);
+        fclose(fp);
+        return -1.0;
+    }
+    fclose(fp);
+
+    if (mpg123_set_index(handle, offsets, step, fill) != MPG123_OK) {
+        free(offsets);
+        return -1.0;
+    }
+    free(offsets);
+    return duration;
+}
+
+static void mp3_scanCache_set(const char *path, mpg123_handle *handle, double duration) {
+    if (duration <= 0.0) {
+        return;
+    }
+    struct stat fileStat;
+    if (stat(path, &fileStat) != 0 || fileStat.st_size <= 0) {
+        return;
+    }
+    off_t fileSize = fileStat.st_size;
+
+    // mpg123_index renvoie un pointeur vers l'index interne de mpg123
+    // (pas une copie) : on ne doit PAS le free.
+    off_t *offsets = NULL;
+    off_t step = 0;
+    size_t fill = 0;
+    if (mpg123_index(handle, &offsets, &step, &fill) != MPG123_OK
+        || offsets == NULL
+        || fill == 0
+        || fill > MP3_CACHE_MAX_FILL) {
+        return;
+    }
+
+    mkdirs(MP3_CACHE_DIR);
+    char cachePath[128];
+    char tempPath[128];
+    mp3_scanCachePath(path, ".cache", cachePath, sizeof(cachePath));
+    mp3_scanCachePath(path, ".cache.tmp", tempPath, sizeof(tempPath));
+
+    FILE *fp = fopen(tempPath, "wb");
+    if (fp == NULL) {
+        writeLog("mp3_reader", "scanCache: fopen tmp failed");
+        return;
+    }
+    uint32_t magic = MP3_CACHE_MAGIC;
+    int version = MP3_CACHE_VERSION;
+    bool ok = fwrite(&magic, sizeof(magic), 1, fp) == 1
+        && fwrite(&version, sizeof(version), 1, fp) == 1
+        && fwrite(&fileSize, sizeof(fileSize), 1, fp) == 1
+        && fwrite(&duration, sizeof(duration), 1, fp) == 1
+        && fwrite(&step, sizeof(step), 1, fp) == 1
+        && fwrite(&fill, sizeof(fill), 1, fp) == 1
+        && fwrite(offsets, sizeof(off_t), fill, fp) == fill;
+    if (ok) {
+        fflush(fp);
+        fsync(fileno(fp));
+    }
+    if (fclose(fp) != 0 || !ok) {
+        writeLog("mp3_reader", "scanCache: write failed");
+        remove(tempPath);
+        return;
+    }
+    if (rename(tempPath, cachePath) != 0) {
+        writeLog("mp3_reader", "scanCache: rename failed");
+        remove(tempPath);
+    }
+}
+
 #define MP3_AUDIO_SAMPLE_RATE 44100
 #define MP3_AUDIO_CHANNELS 2
 #define MP3_AUDIO_BUFFER_SAMPLES 4096
@@ -216,7 +343,6 @@ static void audio_callback(void *userdata, Uint8 *stream, int len) {
     pthread_mutex_unlock(&audioMutex);
 }
 
-// Ferme la piste courante (à appeler UNIQUEMENT avec audioMutex verrouillé).
 static void audio_closeLocked(void) {
     if (mpg != NULL) {
         mpg123_close(mpg);
@@ -351,8 +477,11 @@ void audio_play_path(char *soundPath, double position, bool askDuration) {
                         musicDuration = cachedDuration;
                     } else {
                         musicDuration = mp3_duration_estimate(soundPath);
-                        if (musicDuration < 0.0) {
-                            if (mpg123_scan(handle) == MPG123_OK) {
+                        if (musicDuration < 0.0) { // → VBR
+                            double scanCacheDuration = mp3_scanCache_get(soundPath, handle);
+                            if (scanCacheDuration >= 0.0) {
+                                musicDuration = scanCacheDuration; // cache fichier hit → pas de scan
+                            } else if (mpg123_scan(handle) == MPG123_OK) {
                                 off_t length = mpg123_length(handle);
                                 if (length > 0) {
                                     double sourceRate = (double) MP3_AUDIO_SAMPLE_RATE;
@@ -362,6 +491,7 @@ void audio_play_path(char *soundPath, double position, bool askDuration) {
                                     }
                                     musicDuration = (double) length / sourceRate;
                                 }
+                                mp3_scanCache_set(soundPath, handle, musicDuration);
                             }
                         }
                         audio_duration_cache_set(soundPath, musicDuration);
@@ -422,8 +552,6 @@ void mp3_reader_init(void) {
     if (SDL_OpenAudio(&want, NULL) < 0) {
         writeLog("mp3_reader", "SDL_OpenAudio failed");
     } else {
-        // Un device audio SDL s'ouvre en PAUSE : il faut le démarrer
-        // explicitement pour que le callback soit appelé.
         SDL_PauseAudio(0);
     }
 }

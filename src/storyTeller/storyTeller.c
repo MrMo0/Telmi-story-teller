@@ -163,11 +163,15 @@ int main(int argc, char *argv[]) {
                                 app_home();
                             }
                             break;
-                        case HW_BTN_L1 :
-                            app_page_previous();
+                        case HW_BTN_L1:
+                            if (time_wait()) {
+                                app_page_previous();
+                            }
                             break;
-                        case HW_BTN_R1 :
-                            app_page_next();
+                        case HW_BTN_R1:
+                            if (time_wait()) {
+                                app_page_next();
+                            }
                             break;
                     }
 

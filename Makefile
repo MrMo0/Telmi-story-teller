@@ -88,6 +88,7 @@ core: $(CACHE)/.setup
 	@cd $(SRC_DIR)/storyTeller && BUILD_DIR=$(BIN_DIR) make
 	@cd $(SRC_DIR)/chargingState && BUILD_DIR=$(BIN_DIR) make
 	@cd $(SRC_DIR)/batmon && BUILD_DIR=$(BIN_DIR) make
+	@cd $(SRC_DIR)/keyHeld && BUILD_DIR=$(BIN_DIR) make
 
 dist: build
 	@$(ECHO) $(PRINT_RECIPE)

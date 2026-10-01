@@ -14,7 +14,13 @@ MODEL_MMF=285
 MODEL_MMP=354
 screen_resolution="640x480"
 
+KEY_UP=103
+KEY_HELD_WAIT_MS=300
+ONION_PARTITION=/dev/mmcblk0p2
+
 main() {
+    check_onion_boot
+
     # Set model ID based on hardware detection
     if [ -e /sys/devices/soc0/soc/soc:hall-mh248/hallvalue ] || [ -e /dev/input/event1 ]; then
         export DEVICE_ID=$MODEL_MMF
@@ -74,6 +80,39 @@ main() {
     while true; do
         check_off_order "End"
     done
+}
+
+# Dual boot: holding UP at power on starts OnionOS installed on the second
+# SD card partition. It is mounted over /mnt/SDCARD so Onion runs as if it
+# were alone on the card and never writes to the TelmiOS partition.
+check_onion_boot() {
+    keyHeld $KEY_UP $KEY_HELD_WAIT_MS || return
+    onion_partition_ready || return
+
+    log "\n:: Boot OnionOS from $ONION_PARTITION"
+    sync
+    if ! mount -t vfat "$ONION_PARTITION" /mnt/SDCARD; then
+        log "Mount failed, boot TelmiOS"
+        return
+    fi
+    if [ ! -f /mnt/SDCARD/.tmp_update/updater ]; then
+        log "OnionOS not found, boot TelmiOS"
+        umount /mnt/SDCARD
+        return
+    fi
+
+    # Hand over to Onion with a clean environment, like the stock firmware does
+    unset SDL_VIDEODRIVER SDL_AUDIODRIVER EGL_VIDEODRIVER
+    export LD_LIBRARY_PATH="/lib:/config/lib"
+    cd /mnt/SDCARD/.tmp_update
+    exec ./updater
+}
+
+onion_partition_ready() {
+    [ -b "$ONION_PARTITION" ] && return 0
+    # /dev may lack partition nodes: create it from sysfs major:minor
+    dev_numbers=$(cat /sys/class/block/$(basename "$ONION_PARTITION")/dev 2> /dev/null) || return 1
+    mknod "$ONION_PARTITION" b "${dev_numbers%:*}" "${dev_numbers#*:}"
 }
 
 set_prev_state() {

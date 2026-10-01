@@ -1,38 +1,38 @@
-![Total Download](https://img.shields.io/github/downloads/DantSu/Telmi-story-teller/total.svg) [![v1.10.4 download](https://img.shields.io/github/downloads/DantSu/Telmi-story-teller/1.10.4/total.svg)](https://github.com/DantSu/Telmi-story-teller/releases/tag/1.10.4)
+# Telmi OS — fork MrMo0
 
-<p align="center"><img src="https://dantsu.com/files/Telmi_1280.png" alt="Telmi OS splash screen" /></p>
+Fork de [DantSu/Telmi-story-teller](https://github.com/DantSu/Telmi-story-teller) (basé sur la v1.10.4).
+Pour la présentation, l'installation et l'utilisation de Telmi OS, voir le dépôt d'origine et [telmi.fr](https://telmi.fr).
 
-# Telmi - An open source story teller and MP3 player for Miyoo Mini
+## Différences avec Telmi OS
 
-Telmi OS is an open source story teller and lite MP3 player for Miyoo Mini and Miyoo Mini Plus.
-Telmi OS is for children 3~4 years old and older.
+| Bouton | Où | Action |
+|---|---|---|
+| L1 / R1 | liste des histoires ou albums, vue mosaïque | page précédente / suivante |
+| L2 | liste des histoires | bascule `title.png` ↔ `cover.png` (repli sur `title.png` si pas de cover) |
+| Flèche haut maintenue | à l'allumage | démarre OnionOS installé sur la 2ᵉ partition de la SD |
 
-The story teller is compatible with stories exported from [STUdio](https://github.com/DantSu/studio).
+Menu + L2 règle toujours la luminosité.
 
-[Learn more about Telmi](https://telmi.fr)
+### Dual boot Telmi / Onion
 
-## Installation
+Sans option ni menu : rien pressé → Telmi, flèche haut maintenue à l'allumage → Onion.
 
-Download the latest version of [Telmi Sync](https://telmi.fr/#download) and install Telmi OS on your SD card from Telmi Sync.
+| Partition (MBR) | Format | Contenu |
+|---|---|---|
+| 1 | FAT32 | Telmi OS (ce fork) + `Stories/`, `Saves/`, `Music/` |
+| 2 | FAT32 | Onion OS, copié tel quel |
 
-# Add stories and music on Telmi OS
+La 2ᵉ partition est montée sur `/mnt/SDCARD` avant de lancer Onion : il ne voit ni ne modifie la
+partition Telmi, qui reste reconnue par Telmi Sync. Sans 2ᵉ partition, Telmi démarre normalement.
+Pendant l'installation d'Onion, maintenir la flèche haut à chaque redémarrage.
 
-<p align="center"><img src="https://dantsu.com/files/Telmi_MiyooPC.jpg" alt="Telmi OS - Telmi Sync" /></p>
+## Build
 
-Download the latest version of [Telmi Sync](https://telmi.fr/#download) and install it (Supported OS : Windows, MacOS, Linux).
-Then plug SD card of Telmi OS on your computer, it will be reconized by Telmi Sync. You can now transfer stories and music to Telmi OS.
+```
+docker run --rm -v "$PWD":/root/workspace aemiii91/miyoomini-toolchain:latest \
+  /bin/bash -c 'source /root/.bashrc; cd /root/workspace && make dist'
+```
 
-# Buttons roles
+Copier le contenu de `build/` à la racine de la 1ʳᵉ partition.
 
-<p align="center"><img src="https://telmi.fr/img/miyoo-screen-stories-en.png" alt="Telmi OS - buttons roles selecting story" /><img src="https://telmi.fr/img/miyoo-screen-story-en.png" alt="Telmi OS - buttons roles reading story" /><img src="https://telmi.fr/img/miyoo-screen-music-en.png" alt="Telmi OS - buttons roles playing music" /><img src="https://telmi.fr/img/miyoo-screen-album-en.png" alt="Telmi OS - buttons roles selecting music album" /></p>
-
-# Youtube videos
-
-### Visitez notre chaîne Youtube pour découvrir et tout apprendre sur les fonctionnalités de Telmi
-
-<p align="center"><a href="https://www.youtube.com/@Telmi-x2w" target="_blank"><img src="https://dantsu.com/files/Telmi_Youtube.png" alt="Vidéo d'installation et d'utilisation de Telmi OS et Telmi Sync" width="340" /></a></p>
-
-# Discord
-
-Tu parles français et tu veux discuter avec moi ? Demander de l'aide ? Poser des questions ?
-Rendez vous sur le discord de [Telmi](https://discord.gg/ZTA5FyERbg).
+⚠️ Une mise à jour de Telmi OS par Telmi Sync installe la version officielle à la place de ce fork.

@@ -79,11 +79,12 @@ int main(void) {
     bool turn_off = false;
 
     getDeviceModel();
+    display_getResolution();
 
     SDL_Init(SDL_INIT_VIDEO);
     IMG_Init(IMG_INIT_PNG);
 
-    window = SDL_CreateWindow("main", 0, 0, 640, 480, SDL_WINDOW_SHOWN);
+    window = SDL_CreateWindow("main", 0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT, SDL_WINDOW_SHOWN);
     renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
     screen = SDL_CreateRGBSurface(0, 640, 480, 32, 0, 0, 0, 0);
     texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGB565, SDL_TEXTUREACCESS_STREAMING, screen->w, screen->h);
@@ -180,7 +181,7 @@ int main(void) {
 
         if (!suspended) {
             if (ticks - display_timer >= DISPLAY_TIMEOUT) {
-                if (DEVICE_ID == MIYOO354) {
+                if (HAS_AXP()) {
                     quit = true;
                     turn_off = true;
                     break;

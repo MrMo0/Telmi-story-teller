@@ -170,7 +170,8 @@ void settings_load(void)
     settings.menu_button_haptics = !config_flag_get(".noMenuHaptics");
     settings.show_recents = config_flag_get(".showRecents");
     settings.show_expert = config_flag_get(".showExpert");
-    settings.mute = config_flag_get(".muteVolume");
+    // .muteVolume file could be written by official Onion, making it impossible to unmute in Telmi
+    // settings.mute = config_flag_get(".muteVolume");
     settings.disable_standby = config_flag_get(".disableStandby");
     settings.enable_logging = config_flag_get(".logging");
 

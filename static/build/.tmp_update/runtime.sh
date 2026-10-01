@@ -10,12 +10,19 @@ logfile=$(basename "$0" .sh)
 . $sysdir/script/log.sh
 
 MODEL_MM=283
+MODEL_MMF=285
 MODEL_MMP=354
+screen_resolution="640x480"
 
 main() {
-    # Set model ID
-    axp 0 > /dev/null
-    export DEVICE_ID=$([ $? -eq 0 ] && echo $MODEL_MMP || echo $MODEL_MM)
+    # Set model ID based on hardware detection
+    if [ -e /sys/devices/soc0/soc/soc:hall-mh248/hallvalue ] || [ -e /dev/input/event1 ]; then
+        export DEVICE_ID=$MODEL_MMF
+    elif axp 0 > /dev/null 2>&1; then
+        export DEVICE_ID=$MODEL_MMP
+    else
+        export DEVICE_ID=$MODEL_MM
+    fi
     echo -n "$DEVICE_ID" > /tmp/deviceModel
 
     touch /tmp/is_booting
@@ -35,7 +42,7 @@ main() {
     # Check is charging
     if [ $DEVICE_ID -eq $MODEL_MM ]; then
         is_charging=$(cat /sys/devices/gpiochip0/gpio/gpio59/value)
-    elif [ $DEVICE_ID -eq $MODEL_MMP ]; then
+    elif [ $DEVICE_ID -eq $MODEL_MMP ] || [ $DEVICE_ID -eq $MODEL_MMF ]; then
         axp_status="0x$(axp 0 | cut -d':' -f2)"
         is_charging=$([ $(($axp_status & 0x4)) -eq 4 ] && echo 1 || echo 0)
     fi
@@ -166,6 +173,8 @@ init_system() {
     echo 800 > /sys/class/pwm/pwmchip0/pwm0/period
     echo $brightness_raw > /sys/class/pwm/pwmchip0/pwm0/duty_cycle
     echo 1 > /sys/class/pwm/pwmchip0/pwm0/enable
+
+    get_screen_resolution
 }
 
 load_settings() {
@@ -195,6 +204,28 @@ load_settings() {
             mv -f temp /mnt/SDCARD/system.json
         fi
     fi
+}
+
+get_screen_resolution() {
+    max_attempts=10
+    attempt=0
+
+    while [ "$attempt" -lt "$max_attempts" ]; do
+        screen_resolution=$(grep 'Current TimingWidth=' /proc/mi_modules/fb/mi_fb0 | sed 's/Current TimingWidth=\([0-9]*\),TimingWidth=\([0-9]*\),.*/\1x\2/')
+        if [ -n "$screen_resolution" ]; then
+            break
+        fi
+        attempt=$((attempt + 1))
+        sleep 0.5
+    done
+
+    if [ "$screen_resolution" = "752x560" ] && [ "$(/etc/fw_printenv miyoo_version | cut -d'=' -f2)" -ge "202310271401" ]; then
+        touch /tmp/new_res_available
+    else
+        screen_resolution="640x480"
+    fi
+
+    echo -n "$screen_resolution" > /tmp/screen_resolution
 }
 
 update_time() {

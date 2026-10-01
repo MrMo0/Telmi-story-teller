@@ -316,7 +316,7 @@ bool stories_nightMode_addToPlaylist(void) {
 
 void stories_nightMode_play(void) {
     callback_stories_audio_hook = callback_stories_nightMode;
-    audio_play_path(storiesNightModePlaylist[storiesNightModeIndex], storyTime);
+    audio_play_path(storiesNightModePlaylist[storiesNightModeIndex], storyTime, true);
 }
 
 void stories_nightMode_resume(void) {
@@ -594,12 +594,17 @@ void stories_drawTimeline(bool forceDraw) {
 
     char strCurrentStoryTime[16], strTotalStoryTime[16];
     sprintf(strCurrentStoryTime, "%i:%02i", storyPosition / 60, storyPosition % 60);
-    sprintf(strTotalStoryTime, "%i:%02i", storyDuration / 60, storyDuration % 60);
-
+    if(storyDuration > 0) {
+        sprintf(strTotalStoryTime, "%i:%02i", storyDuration / 60, storyDuration % 60);
+    } else {
+        sprintf(strTotalStoryTime, "-:--");
+    }
     video_screenBlack();
-    video_drawRectangle(80, 217, (int) (((double) storyPosition / (double) storyDuration) * 479.0), 19, 255, 186, 0);
+    if(storyDuration > 0) {
+        video_drawRectangle(80, 217, (int) (((double) storyPosition / (double) storyDuration) * 479.0), 19, 255, 186, 0);
+    }
     video_screenAddImage(SYSTEM_RESOURCES, "storytellerStoryPlayer.png", 61, 203, 518);
-    if (Mix_PausedMusic() == 1) {
+    if (audio_isPaused()) {
         video_screenAddImage(SYSTEM_RESOURCES, "storytellerPause.png", 308, 245, 24);
     } else {
         video_screenAddImage(SYSTEM_RESOURCES, "storytellerPlay.png", 308, 245, 24);
@@ -710,7 +715,7 @@ void stories_readStage(void) {
     sprintf(story_image_path, "%s%s/images/", STORIES_RESOURCES, storiesList[storyIndex]);
 
     if (isAudioDefined) {
-        audio_play(story_audio_path, cJSON_GetStringValue(audioJson), storyTime);
+        audio_play(story_audio_path, cJSON_GetStringValue(audioJson), storyTime, !isImageDefined);
         if (storyAutoplay) {
             callback_stories_audio_hook = callback_stories_autoplay;
             storyOkAction = cJSON_IsTrue(cJSON_GetObjectItem(controlJson, "ok"));
@@ -977,7 +982,7 @@ void stories_title(void) {
 
     char story_path[STR_MAX];
     sprintf(story_path, "%s%s/", STORIES_RESOURCES, storiesList[storyIndex]);
-    audio_play(story_path, "title.mp3", storyTime);
+    audio_play(story_path, "title.mp3", storyTime, false);
     callback_stories_audio_hook = NULL;
 
     storyScreenEnabled = true;
@@ -1057,7 +1062,7 @@ void stories_down(void) {
 void stories_rewind(double time) {
     storyTime = audio_getPosition() + time;
     double audioDuration = audio_getDuration();
-    if (storyTime > audioDuration) {
+    if (audioDuration > 0 && storyTime >= audioDuration) {
         if (callback_stories_audio_hook != NULL) {
             callback_stories_audio_hook();
             return;
@@ -1160,7 +1165,7 @@ void stories_menu(void) {
     }
 }
 
-void stories_ok(void) {
+void stories_ok() {
     if (storiesCount == 0) {
         return;
     }
@@ -1204,13 +1209,13 @@ void stories_pause(void) {
         stories_nightMode_addToPlaylist();
         stories_nightMode_start();
     } else {
-        if (Mix_PlayingMusic() == 1) {
-            if (Mix_PausedMusic() == 1) {
+        if (audio_isPlaying()) {
+            if (audio_isPaused()) {
                 autosleep_lock();
-                Mix_ResumeMusic();
+                audio_resume();
             } else {
                 stories_autosleep_unlock();
-                Mix_PauseMusic();
+                audio_pause();
             }
             stories_showTimeline();
         }
@@ -1239,8 +1244,8 @@ void stories_save(void) {
         return;
     }
 
-    if (Mix_PlayingMusic() == 1) {
-        if (Mix_PausedMusic() != 1) {
+    if (audio_isPlaying()) {
+        if (!audio_isPaused()) {
             stories_pause();
         }
     }
@@ -1274,7 +1279,7 @@ void stories_reset(void) {
 }
 
 bool stories_callCallback(void) {
-    if (callback_stories_audio_hook != NULL && audio_getPosition() == audio_getDuration()) {
+    if (callback_stories_audio_hook != NULL && audio_isFinished()) {
         callback_stories_audio_hook();
         return true;
     }

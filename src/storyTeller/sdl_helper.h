@@ -2,14 +2,18 @@
 #define STORYTELLER_SDL_HELPER__
 
 #include <math.h>
+#include <stdint.h>
 
 #include "SDL2/SDL.h"
-#include "SDL2/SDL_mixer.h"
 #include "SDL2/SDL_image.h"
 #include "SDL2/SDL_ttf.h"
 #include "SDL2/SDL_gfx.h"
 
+#include "system/display.h"
 #include "utils/str.h"
+
+#include "./mp3_reader.h"
+#include "./crypt_helpers.h"
 #include "./logs_helper.h"
 #include "./app_battery.h"
 #include "./app_lock.h"
@@ -31,8 +35,16 @@ static SDL_Surface *screen = NULL;
 static SDL_Surface *appSurface = NULL;
 static SDL_Texture *texture = NULL;
 static SDL_Renderer *renderer = NULL;
-static Mix_Music *music;
-static double musicDuration;
+
+#define SURFACE_CACHE_SIZE 32
+
+typedef struct {
+    uint64_t hash;
+    SDL_Surface *surface;
+} surfaceCacheEntry;
+
+static surfaceCacheEntry surfaceCache[SURFACE_CACHE_SIZE];
+
 static TTF_Font *fontBold24;
 static TTF_Font *fontBold20;
 static TTF_Font *fontBold18;
@@ -47,51 +59,47 @@ static SDL_Color colorOrange = {255, 181, 0};
 static SDL_Color colorRed = {238, 45, 0};
 
 
-static SDL_Surface *cacheSurfaces[16] = {NULL, NULL, NULL, NULL,
-                                         NULL, NULL, NULL, NULL,
-                                         NULL, NULL, NULL, NULL,
-                                         NULL, NULL, NULL, NULL};
-static char cacheSurfacesKeys[16][STR_MAX * 2 + 12] = {{'\0'},{'\0'},{'\0'},{'\0'},
-                                                       {'\0'},{'\0'},{'\0'},{'\0'},
-                                                       {'\0'},{'\0'},{'\0'},{'\0'},
-                                                       {'\0'},{'\0'},{'\0'},{'\0'}};
-
-SDL_Surface *video_findCacheSurface(char* surfaceKey) {
-    for (int i = 0; i < 16; ++i) {
-        if (strcmp(surfaceKey, cacheSurfacesKeys[i]) != 0) {
-            continue;
-        }
-
-        SDL_Surface *tmpSurface = cacheSurfaces[i];
-        for (int j = i; j > 0; --j) {
-            strcpy(cacheSurfacesKeys[j], cacheSurfacesKeys[j - 1]);
-            cacheSurfaces[j] = cacheSurfaces[j - 1];
-        }
-        strcpy(cacheSurfacesKeys[0], surfaceKey);
-        cacheSurfaces[0] = tmpSurface;
-        return tmpSurface;
+static uint64_t video_surfaceCacheHash(const char *path, int width) {
+    uint64_t hash = string_hash(path);
+    uint32_t w = (uint32_t) width;
+    for (int i = 0; i < 4; ++i) {
+        hash ^= (uint8_t) ((w >> (8 * i)) & 0xff);
+        hash *= 0x100000001b3ULL;
     }
-    return NULL;
+    return hash;
 }
 
-void video_saveCacheSurface(char *surfaceKey, SDL_Surface *surface) {
-    if (cacheSurfaces[15] != NULL) {
-        SDL_FreeSurface(cacheSurfaces[15]);
+SDL_Surface *video_findCacheSurface(uint64_t hash, const char *path) {
+    int i = 0;
+    while (i < SURFACE_CACHE_SIZE && surfaceCache[i].hash != hash) {
+        ++i;
     }
-    for (int i = 15; i > 0; --i) {
-        strcpy(cacheSurfacesKeys[i], cacheSurfacesKeys[i - 1]);
-        cacheSurfaces[i] = cacheSurfaces[i - 1];
+    SDL_Surface *surface = NULL;
+    if (i < SURFACE_CACHE_SIZE) {
+        surfaceCacheEntry entry = surfaceCache[i];
+        memmove(&surfaceCache[1], &surfaceCache[0], i * sizeof(surfaceCache[0]));
+        surfaceCache[0] = entry;
+        surface = entry.surface;
     }
-    strcpy(cacheSurfacesKeys[0], surfaceKey);
-    cacheSurfaces[0] = surface;
+    return surface;
+}
+
+void video_saveCacheSurface(uint64_t hash, const char *path, SDL_Surface *surface) {
+    if (surfaceCache[SURFACE_CACHE_SIZE - 1].surface != NULL) {
+        SDL_FreeSurface(surfaceCache[SURFACE_CACHE_SIZE - 1].surface);
+    }
+    memmove(&surfaceCache[1], &surfaceCache[0], (SURFACE_CACHE_SIZE - 1) * sizeof(surfaceCache[0]));
+    surfaceCache[0].hash = hash;
+    surfaceCache[0].surface = surface;
 }
 
 SDL_Surface *video_loadAndCacheImage(char *imagePath) {
-    SDL_Surface *image = video_findCacheSurface(imagePath);
+    uint64_t hash = string_hash(imagePath);
+    SDL_Surface *image = video_findCacheSurface(hash, imagePath);
     if (image == NULL) {
         image = IMG_Load(imagePath);
         if (image != NULL) {
-            video_saveCacheSurface(imagePath, image);
+            video_saveCacheSurface(hash, imagePath, image);
         }
     }
     return image;
@@ -107,11 +115,10 @@ void video_drawRectangle(int x, int y, int width, int height, Uint8 r, Uint8 g, 
 
 void video_screenAddImage(const char *dir, char *name, int x, int y, int width) {
     char imagePath[STR_MAX * 2];
-    char imageKey[STR_MAX * 2 + 12];
     sprintf(imagePath, "%s%s", dir, name);
-    sprintf(imageKey, "%s|%i", imagePath, width);
+    uint64_t hash = video_surfaceCacheHash(imagePath, width);
 
-    SDL_Surface *image = video_findCacheSurface(imageKey);
+    SDL_Surface *image = video_findCacheSurface(hash, imagePath);
 
     if (image != NULL) {
         SDL_BlitSurface(image, NULL, appSurface, &(SDL_Rect) {x, y});
@@ -128,12 +135,12 @@ void video_screenAddImage(const char *dir, char *name, int x, int y, int width) 
         SDL_Surface *imageScaled = rotozoomSurface(image, 0.0, (double) width / (double) image->w, 1);
         if (imageScaled != NULL) {
             SDL_BlitSurface(imageScaled, NULL, appSurface, &(SDL_Rect) {x, y});
-            video_saveCacheSurface(imageKey, imageScaled);
+            video_saveCacheSurface(hash, imagePath, imageScaled);
         }
         SDL_FreeSurface(image);
     } else {
         SDL_BlitSurface(image, NULL, appSurface, &(SDL_Rect) {x, y});
-        video_saveCacheSurface(imageKey, image);
+        video_saveCacheSurface(hash, imagePath, image);
     }
 }
 
@@ -165,6 +172,28 @@ void video_showBattery(void) {
     char strBatteryPercent[6];
     sprintf(strBatteryPercent, "%i%%", batteryPercentage);
     video_screenWriteFont(strBatteryPercent, fontRegular16, colorBattery, 555, 2, SDL_ALIGN_CENTER);
+}
+
+void video_showRam(void) {
+    long totalKb = 0;
+    long availableKb = 0;
+    FILE *file = fopen("/proc/meminfo", "r");
+    if (file != NULL) {
+        char line[128];
+        while (fgets(line, sizeof(line), file) != NULL) {
+            if (strncmp(line, "MemTotal:", 9) == 0) {
+                sscanf(line, "MemTotal: %ld kB", &totalKb);
+            } else if (strncmp(line, "MemAvailable:", 13) == 0) {
+                sscanf(line, "MemAvailable: %ld kB", &availableKb);
+            }
+        }
+        fclose(file);
+    }
+    long usedKb = totalKb - availableKb;
+
+    char ramText[64];
+    sprintf(ramText, "RAM : %ld Ko utilisés, %ld Ko total", usedKb, totalKb);
+    video_screenWriteFont(ramText, fontRegular16, colorWhite60, 380, 2, SDL_ALIGN_RIGHT);
 }
 
 void video_showBar(void) {
@@ -206,6 +235,7 @@ void video_showAppLock(void) {
 
 void video_applyToVideo(void) {
     video_showBattery();
+    // video_showRam();
     SDL_BlitSurface(appSurface, NULL, screen, NULL);
     video_showAppLock();
     video_showBar();
@@ -239,49 +269,6 @@ void video_displayBlackScreen(void) {
     video_applyToVideo();
 }
 
-void audio_free_music(void) {
-    if (music != NULL) {
-        Mix_HaltMusic();
-        Mix_FreeMusic(music);
-        music = NULL;
-    }
-}
-
-void audio_setPosition(double position) {
-    if (music != NULL && Mix_PlayingMusic() == 1) {
-        Mix_SetMusicPosition(position);
-    }
-}
-
-double audio_getDuration(void) {
-    return musicDuration;
-}
-
-double audio_getPosition(void) {
-    if (music != NULL) {
-        return Mix_GetMusicPosition(music);
-    }
-    return 0.0;
-}
-
-void audio_play_path(char *soundPath, double position) {
-    audio_free_music();
-    music = Mix_LoadMUS(soundPath);
-    if (music != NULL) {
-        musicDuration = Mix_MusicDuration(music);
-        Mix_PlayMusic(music, 1);
-        Mix_SetMusicPosition(position);
-    } else {
-        musicDuration = 0.0;
-    }
-}
-
-void audio_play(const char *dir, const char *name, double position) {
-    char soundPath[STR_MAX * 2];
-    sprintf(soundPath, "%s%s", dir, name);
-    audio_play_path(soundPath, position);
-}
-
 void video_audio_init(void) {
     SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
@@ -289,12 +276,9 @@ void video_audio_init(void) {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
     IMG_Init(IMG_INIT_PNG);
     TTF_Init();
-    Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 4096);
-    Mix_Init(MIX_INIT_MP3);
-    Mix_Volume(-1, MIX_MAX_VOLUME);
-    Mix_VolumeMusic(MIX_MAX_VOLUME);
+    mp3_reader_init();
 
-    window = SDL_CreateWindow("main", 0, 0, 640, 480, SDL_WINDOW_SHOWN);
+    window = SDL_CreateWindow("main", 0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT, SDL_WINDOW_SHOWN);
     renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
     screen = SDL_CreateRGBSurface(0, 640, 480, 32, 0, 0, 0, 0);
     appSurface = SDL_CreateRGBSurface(0, screen->w, screen->h, 32, 0, 0, 0, 0);
@@ -312,11 +296,7 @@ void video_audio_init(void) {
 void video_audio_quit(void) {
     TTF_Quit();
 
-    if (music != NULL) {
-        Mix_FreeMusic(music);
-        music = NULL;
-    }
-    Mix_CloseAudio();
+    mp3_reader_quit();
 
     SDL_FreeSurface(appSurface);
     SDL_FreeSurface(screen);

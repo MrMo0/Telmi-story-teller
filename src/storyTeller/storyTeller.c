@@ -2,12 +2,14 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 
 #include "system/system.h"
 #include "system/keymap_hw.h"
 #include "system/settings.h"
 #include "system/settings_sync.h"
 #include "system/display.h"
+#include "system/device_model.h"
 
 #include "./logs_helper.h"
 #include "./time_helper.h"
@@ -18,6 +20,7 @@
 #include "./sdl_helper.h"
 #include "./app_selector.h"
 #include "./app_parameters.h"
+#include "./headphone.h"
 
 // for ev.value
 #define RELEASED 0
@@ -40,12 +43,18 @@ bool keyinput_isValid(void) {
 }
 
 int main(int argc, char *argv[]) {
-
     srand(time(NULL));
+    display_init();
     video_audio_init();
     settings_init();
-    display_init();
+    getDeviceModel();
+    {
+        char msg[64];
+        snprintf(msg, sizeof(msg), "DEVICE_ID=%d", DEVICE_ID);
+        writeLog("storyTeller", msg);
+    }
     parameters_init();
+    headphone_init();
     settings_setVolume(parameters_getAudioVolumeStartup(), true);
     settings_setBrightness(parameters_getScreenBrightnessStartup(), true, false);
 
@@ -71,23 +80,23 @@ int main(int argc, char *argv[]) {
         forceRefreshScreen = app_volume_checkDisplay() || forceRefreshScreen;
         forceRefreshScreen = app_brightness_checkDisplay() || forceRefreshScreen;
         app_update();
+        headphone_check();
 
         if (poll(fds, 1, 0) > 0) {
             if (!keyinput_isValid()) {
                 continue;
             }
-
             switch (ev.value) {
                 case PRESSED:
                     switch (ev.code) {
-                        case HW_BTN_MENU :
+                        case HW_BTN_MENU:
                             isMenuPressed = true;
                             forceRefreshScreen = applock_startTimer() || forceRefreshScreen;
                             if (applock_isLocked()) {
                                 menuPreventDefault = true;
                             }
                             break;
-                        case HW_BTN_POWER :
+                        case HW_BTN_POWER:
                             if (!applock_isLocked()) {
                                 startPowerPressedTime = get_time();
                                 startPowerPressed = true;
@@ -105,10 +114,10 @@ int main(int argc, char *argv[]) {
                     }
                     autosleep_keepAwake();
                     switch (ev.code) {
-                        case HW_BTN_POWER :
+                        case HW_BTN_POWER:
                             startPowerPressed = false;
                             break;
-                        case HW_BTN_MENU :
+                        case HW_BTN_MENU:
                             if (!menuPreventDefault) {
                                 app_menu();
                             }
@@ -116,29 +125,43 @@ int main(int argc, char *argv[]) {
                             menuPreventDefault = false;
                             forceRefreshScreen = applock_stopTimer() || forceRefreshScreen;
                             break;
-                        case HW_BTN_LEFT :
-                            app_previous();
+                        case HW_BTN_LEFT:
+                            if (time_wait()) {
+                                app_previous();
+                            }
                             break;
-                        case HW_BTN_RIGHT :
-                            app_next();
+                        case HW_BTN_RIGHT:
+                            if (time_wait()) {
+                                app_next();
+                            }
                             break;
-                        case HW_BTN_UP :
-                            app_up();
+                        case HW_BTN_UP:
+                            if (time_wait()) {
+                                app_up();
+                            }
                             break;
-                        case HW_BTN_DOWN :
-                            app_down();
+                        case HW_BTN_DOWN:
+                            if (time_wait()) {
+                                app_down();
+                            }
                             break;
-                        case HW_BTN_START :
-                        case HW_BTN_SELECT :
-                            app_pause();
+                        case HW_BTN_START:
+                        case HW_BTN_SELECT:
+                            if (time_wait()) {
+                                app_pause();
+                            }
                             break;
-                        case HW_BTN_A :
-                        case HW_BTN_B :
-                            app_ok();
+                        case HW_BTN_A:
+                        case HW_BTN_B:
+                            if (time_wait()) {
+                                app_ok();
+                            }
                             break;
-                        case HW_BTN_Y :
-                        case HW_BTN_X :
-                            app_home();
+                        case HW_BTN_Y:
+                        case HW_BTN_X:
+                            if (time_wait()) {
+                                app_home();
+                            }
                             break;
                         case HW_BTN_L1 :
                             app_page_previous();
@@ -150,14 +173,14 @@ int main(int argc, char *argv[]) {
 
                     if (isMenuPressed) {
                         switch (ev.code) {
-                            case HW_BTN_L2 :
-                            case HW_BTN_VOLUME_DOWN :
+                            case HW_BTN_L2:
+                            case HW_BTN_VOLUME_DOWN:
                                 forceRefreshScreen = app_brightness_down();
                                 applock_stopTimer();
                                 menuPreventDefault = true;
                                 break;
-                            case HW_BTN_R2 :
-                            case HW_BTN_VOLUME_UP :
+                            case HW_BTN_R2:
+                            case HW_BTN_VOLUME_UP:
                                 forceRefreshScreen = app_brightness_up();
                                 applock_stopTimer();
                                 menuPreventDefault = true;
@@ -167,10 +190,10 @@ int main(int argc, char *argv[]) {
                         }
                     } else {
                         switch (ev.code) {
-                            case HW_BTN_VOLUME_DOWN :
+                            case HW_BTN_VOLUME_DOWN:
                                 forceRefreshScreen = app_volume_down();
                                 break;
-                            case HW_BTN_VOLUME_UP :
+                            case HW_BTN_VOLUME_UP:
                                 forceRefreshScreen = app_volume_up();
                                 break;
                             default:
@@ -184,12 +207,12 @@ int main(int argc, char *argv[]) {
             }
         }
 
-        if(forceRefreshScreen) {
+        if (forceRefreshScreen) {
             app_forceRefreshScreen();
         }
     }
 
-    exit_loop:
+exit_loop:
     app_save();
     display_setScreen(true);
     video_audio_quit();

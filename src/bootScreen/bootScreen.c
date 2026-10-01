@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "system/display.h"
 #include "utils/file.h"
 #include "utils/flags.h"
 #include "utils/log.h"
@@ -26,6 +27,8 @@ TTF_Font *loadFont(int size)
 
 int main(int argc, char *argv[])
 {
+    display_getResolution();
+
     // Boot : Loading screen
     // End_Save : Ending screen with save
     // End : Ending screen without save
@@ -34,7 +37,7 @@ int main(int argc, char *argv[])
     IMG_Init(IMG_INIT_PNG);
     TTF_Init();
 
-    SDL_Window *window = SDL_CreateWindow("main", 0, 0, 640, 480, SDL_WINDOW_SHOWN);
+    SDL_Window *window = SDL_CreateWindow("main", 0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT, SDL_WINDOW_SHOWN);
     SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
     SDL_Surface *screen = SDL_CreateRGBSurface(0, 640, 480, 32, 0, 0, 0, 0);
     SDL_Texture *texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGB565, SDL_TEXTUREACCESS_STREAMING, screen->w, screen->h);

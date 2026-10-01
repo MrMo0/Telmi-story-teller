@@ -31,6 +31,7 @@
 #define MAX_STORIES_NIGHT_MODE 16
 
 static int storiesDiplayMode = STORIES_DISPLAY_MODE_SINGLE;
+static bool storiesShowCover = false;
 static bool storiesNightModeEnabled = false;
 static bool storiesNightModePlaying = false;
 static int storiesNightModeIndex = 0;
@@ -908,11 +909,23 @@ void stories_load(void) {
     stories_loadAction();
 }
 
+// cover.png is optional: fall back to title.png when missing
+char *stories_titleImage(const char *story_path) {
+    if (storiesShowCover) {
+        char cover_path[STR_MAX * 2];
+        sprintf(cover_path, "%scover.png", story_path);
+        if (exists(cover_path)) {
+            return "cover.png";
+        }
+    }
+    return "title.png";
+}
+
 void stories_title_single(void) {
     char story_path[STR_MAX];
     sprintf(story_path, "%s%s/", STORIES_RESOURCES, storiesList[storyIndex]);
     video_drawRectangle(0, 0, 640, 480, 0, 0, 0);
-    video_screenAddImage(story_path, "title.png", 0, 0, 640);
+    video_screenAddImageFit(story_path, stories_titleImage(story_path), 0, 0, 640, 480);
     if (!storiesNightModeEnabled && storiesHasSaveList[storyIndex]) {
         video_screenAddImage(SYSTEM_RESOURCES, "storytellerResumeStory.png", 15, 15, 48);
     }
@@ -935,7 +948,7 @@ void stories_title_tile(int base, int pos) {
     char story_path[STR_MAX];
     sprintf(story_path, "%s%s/", STORIES_RESOURCES, storiesList[sIndex]);
     video_drawRectangle(x, y, 171, 128, 0, 0, 0);
-    video_screenAddImage(story_path, "title.png", x, y, 171);
+    video_screenAddImageFit(story_path, stories_titleImage(story_path), x, y, 171, 128);
     if (!storiesNightModeEnabled && storiesHasSaveList[sIndex]) {
         video_screenAddImage(SYSTEM_RESOURCES, "storytellerResumeStory.png", x + 5, y + 5, 48);
     }
@@ -964,6 +977,14 @@ void stories_title_tiles(void) {
     video_applyToVideo();
 }
 
+void stories_title_display(void) {
+    if (storiesDiplayMode == STORIES_DISPLAY_MODE_SINGLE) {
+        stories_title_single();
+    } else {
+        stories_title_tiles();
+    }
+}
+
 void stories_title(void) {
     if (storiesCount == 0) {
         video_displayImage(SYSTEM_RESOURCES, "noStory.png");
@@ -987,11 +1008,7 @@ void stories_title(void) {
 
     storyScreenEnabled = true;
     display_setScreen(storyScreenEnabled);
-    if (storiesDiplayMode == STORIES_DISPLAY_MODE_SINGLE) {
-        stories_title_single();
-    } else {
-        stories_title_tiles();
-    }
+    stories_title_display();
 }
 
 void stories_transition(char *transition) {
@@ -1107,6 +1124,15 @@ void stories_previous(void) {
         }
     }
 }
+
+void stories_toggleCover(void) {
+    if (storiesCount == 0 || storyActionKey[0] != '\0') {
+        return;
+    }
+    storiesShowCover = !storiesShowCover;
+    stories_title_display();
+}
+
 void stories_page_previous(void) {
     if (storiesDiplayMode != STORIES_DISPLAY_MODE_TILES || storyActionKey[0] != '\0')
         return;

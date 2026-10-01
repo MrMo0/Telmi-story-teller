@@ -200,6 +200,11 @@ int main(int argc, char *argv[]) {
                             case HW_BTN_VOLUME_UP:
                                 forceRefreshScreen = app_volume_up();
                                 break;
+                            case HW_BTN_L2:
+                                if (time_wait()) {
+                                    app_toggleCover();
+                                }
+                                break;
                             default:
                                 break;
                         }

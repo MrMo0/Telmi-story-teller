@@ -144,6 +144,41 @@ void video_screenAddImage(const char *dir, char *name, int x, int y, int width) 
     }
 }
 
+// Scale image to fit inside width x height (keeping ratio) and center it in that box.
+void video_screenAddImageFit(const char *dir, char *name, int x, int y, int width, int height) {
+    char imagePath[STR_MAX * 2];
+    sprintf(imagePath, "%s%s", dir, name);
+    // Box size packed in the key (>= 65536) so it never collides with video_screenAddImage widths
+    uint64_t hash = video_surfaceCacheHash(imagePath, (width << 16) | height);
+
+    SDL_Surface *image = video_findCacheSurface(hash, imagePath);
+
+    if (image == NULL) {
+        SDL_Surface *imageLoaded = IMG_Load(imagePath);
+
+        if (imageLoaded == NULL) {
+            return;
+        }
+
+        double scale = fmin((double) width / (double) imageLoaded->w, (double) height / (double) imageLoaded->h);
+        if (fabs(scale - 1.0) > 0.001) {
+            image = rotozoomSurface(imageLoaded, 0.0, scale, 1);
+            SDL_FreeSurface(imageLoaded);
+            if (image == NULL) {
+                return;
+            }
+        } else {
+            image = imageLoaded;
+        }
+        video_saveCacheSurface(hash, imagePath, image);
+    }
+
+    SDL_Rect clip = {x, y, width, height};
+    SDL_SetClipRect(appSurface, &clip);
+    SDL_BlitSurface(image, NULL, appSurface, &(SDL_Rect) {x + (width - image->w) / 2, y + (height - image->h) / 2});
+    SDL_SetClipRect(appSurface, NULL);
+}
+
 void video_screenWriteFont(const char *text, TTF_Font *font, SDL_Color color, int x, int y, int align) {
     SDL_Surface *sdlText = TTF_RenderUTF8_Blended(font, text, color);
     if (sdlText != NULL) {

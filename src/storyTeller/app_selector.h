@@ -192,6 +192,12 @@ void app_page_next(void) {
     }
 }
 
+void app_toggleCover(void) {
+    if (appOpened && (appIndex == APP_STORIES || appIndex == APP_NIGHTMODE)) {
+        stories_toggleCover();
+    }
+}
+
 void app_pause(void) {
     if (appOpened) {
         switch (appIndex) {
